@@ -16,6 +16,7 @@ from forms import *
 from flask_migrate import Migrate
 import sys
 import os
+from flask_wtf.csrf import CSRFProtect
 #----------------------------------------------------------------------------#
 # App Config.
 #----------------------------------------------------------------------------#
@@ -27,6 +28,9 @@ db = SQLAlchemy(app)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 migrate = Migrate(app, db)
+
+csrf = CSRFProtect(app)
+app.config['WTF_CSRF_ENABLED'] = False
 
 
 # TODO: connect to a local postgresql database
@@ -91,11 +95,16 @@ class Show(db.Model):
 
 
 def format_datetime(value, format='medium'):
-    date = dateutil.parser.parse(value)
-    if format == 'full':
-        format = "EEEE MMMM, d, y 'at' h:mma"
-    elif format == 'medium':
-        format = "EE MM, dd, y h:mma"
+    # date = dateutil.parser.parse(value)
+    # if format == 'full':
+    #     format = "EEEE MMMM, d, y 'at' h:mma"
+    # elif format == 'medium':
+    #     format = "EE MM, dd, y h:mma"
+    
+    if isinstance(value, str):
+        date = dateutil.parser.parse(value)
+    else:
+        date = value
     return babel.dates.format_datetime(date, format, locale='en')
 
 
@@ -119,22 +128,21 @@ def venues():
     # TODO: replace with real venues data.
     #       num_upcoming_shows should be aggregated based on number of upcoming shows per venue.
     data = {}
-    for row in Venue.query.all():
-        city = row.city
+    for cities in Venue.query.all():
+        city = cities.city
         if city not in data:
             data[city] = {}
             data[city]['city'] = city
-            data[city]['state'] = row.state
+            data[city]['state'] = cities.state
             data[city]['venues'] = []
-        venue_info = {}
-        venue_info['id'] = row.id
-        venue_info['name'] = row.name
+        venue_data = {}
+        venue_data['id'] = cities.id
+        venue_data['name'] = cities.name
         # upcoming_shows = db.session.query(Show).filter(Show.venue_id == row.id)\
         # .filter(Show.start_time > datetime.now()).all()
-        upcoming_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id)\
-        .filter(Show.start_time > datetime.now()).all()
-        venue_info['num_upcoming_shows'] = len(upcoming_shows)
-        data[city]['venues'].append(venue_info)
+        upcoming_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id).filter(Show.start_time > datetime.now()).all()
+        venue_data['num_upcoming_shows'] = len(upcoming_shows)
+        data[city]['venues'].append(venue_data)
 
     return render_template('pages/venues.html', areas=data.values());
 
@@ -145,26 +153,23 @@ def search_venues():
     # seach for Hop should return "The Musical Hop".
     # search for "Music" should return "The Musical Hop" and "Park Square Live Music & Coffee"
     
-    search_term = request.form.get('search_term', '')
-    search_results = db.session.query(Venue)\
-    .filter(Venue.name.ilike(f'%{search_term}%')).all()
+    string_search = request.form.get('string_search', '')
+    search_results = db.session.query(Venue).filter(Venue.name.ilike(f'%{string_search}%')).all()
 
     response = {}
     response['count'] = len(search_results)
     response['data'] = []
-    for row in search_results:
-        venue_info = {}
-        venue_info['id'] = row.id
-        venue_info['name'] = row.name
+    for venues in search_results:
+        venue = {}
+        venue['id'] = venues.id
+        venue['name'] = venues.name
         # upcoming_shows = db.session.query(Show).filter(Show.venue_id == row.id)\
         # .filter(Show.start_time > datetime.now()).all()
-        upcoming_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id)\
-        .filter(Show.start_time > datetime.now()).all()
-        venue_info['num_upcoming_shows'] = len(upcoming_shows)
-        response['data'].append(venue_info)
+        upcoming_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id).filter(Show.start_time > datetime.now()).all()
+        venue['num_upcoming_shows'] = len(upcoming_shows)
+        response['data'].append(venue)
 
-    return render_template('pages/search_venues.html', results=response, 
-        search_term=search_term)
+    return render_template('pages/search_venues.html', results=response, string_search=string_search)
     
 @app.route('/venues/<int:venue_id>', methods=['GET'])
 def show_venue(venue_id):
@@ -173,59 +178,58 @@ def show_venue(venue_id):
     # convert genre string back to array
     
     venue = Venue.query.filter_by(id=venue_id).first()
-    data = {}
-    data['id'] = venue.id
-    data['name'] = venue.name
-    data['genres'] = venue.genres
-    data['address'] = venue.address
-    data['city'] = venue.city
-    data['state'] = venue.state
-    data['phone'] = venue.phone
-    data['website'] = venue.website
-    data['facebook_link'] = venue.facebook_link
-    data['seeking_talent'] = venue.seeking_talent
-    if venue.seeking_talent:
-        data['seeking_description'] = venue.seeking_description
-    data['image_link'] = venue.image_link
+    venue_data = {}
+    venue_data['id'] = venue.id
+    venue_data['name'] = venue.name
+    venue_data['genres'] = venue.genres
+    venue_data['address'] = venue.address
+    venue_data['city'] = venue.city
+    venue_data['state'] = venue.state
+    venue_data['phone'] = venue.phone
+    venue_data['website'] = venue.website
+    venue_data['facebook_link'] = venue.facebook_link
+    venue_data['seeking_talent'] = venue.seeking_talent
+    if venue.seeking_talent:venue_data['seeking_description'] = venue.seeking_description
+    venue_data['image_link'] = venue.image_link
 
     # get the data of past shows and upcoming shows
-    data['past_shows'] = []
-    data['upcoming_shows'] = []
+    venue_data['past_shows'] = []
+    venue_data['upcoming_shows'] = []
 
     # past_shows = Show.query.filter(Show.venue_id == venue_id)\
     #     .filter(Show.start_time < datetime.now()).order_by(desc(Show.start_time)).all()
-    past_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id).filter(Show.start_time < datetime.now()).order_by(desc(Show.start_time)).all()
+    past_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id).filter(Show.start_time < datetime.now()).order_by(Show.start_time).all()
 
-    data['past_shows_count'] = len(past_shows)
-    for row in past_shows:
-        show_info = {}
-        show_info['artist_id'] = row.artist_id
-        show_info['artist_name'] = row.artist.name
-        show_info['artist_image_link'] = row.artist.image_link
-        show_info['start_time'] = row.start_time
-        data['past_shows'].append(show_info)
+    venue_data['past_shows_count'] = len(past_shows)
+    for past in past_shows:
+        past_count_info = {}
+        past_count_info['artist_id'] = past.artist_id
+        past_count_info['artist_name'] = past.artist.name
+        past_count_info['artist_image_link'] = past.artist.image_link
+        past_count_info['start_time'] = past.start_time
+        venue_data['past_shows'].append(past_count_info)
 
     # upcoming_shows = Show.query.filter(Show.venue_id == venue_id)\
     #     .filter(Show.start_time > datetime.now()).order_by(Show.start_time).all()
-    upcoming_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id)\
-        .filter(Show.start_time > datetime.now()).order_by(Show.start_time).all()
+    upcoming_shows = db.session.query(Show).join(Venue, Show.venue_id == Venue.id).filter(Show.start_time > datetime.now()).order_by(Show.start_time).all()
 
-    data['upcoming_shows_count'] = len(upcoming_shows)
-    for row in upcoming_shows:
-        show_info = {}
-        show_info['artist_id'] = row.artist_id
-        show_info['artist_name'] = row.artist.name
-        show_info['artist_image_link'] = row.artist.image_link
-        show_info['start_time'] = row.start_time
-        data['upcoming_shows'].append(show_info)
+    venue_data['upcoming_shows_count'] = len(upcoming_shows)
+    for upcoming in upcoming_shows:
+        upcoming_count = {}
+        upcoming_count['artist_id'] = upcoming.artist_id
+        upcoming_count['artist_name'] = upcoming.artist.name
+        upcoming_count['artist_image_link'] = upcoming.artist.image_link
+        upcoming_count['start_time'] = upcoming.start_time
+        upcoming_count['upcoming_shows'].append(upcoming_count)
 
-    return render_template('pages/show_venue.html', venue=data)
+    return render_template('pages/show_venue.html', venue=venue_data)
 
 #  Create Venue
 #  ----------------------------------------------------------------
 
 
 @app.route('/venues/create', methods=['GET'])
+
 def create_venue_form():
     Form = VenueForm()
     return render_template('forms/new_venue.html', form=Form)
@@ -393,7 +397,7 @@ def show_artist(artist_id):
     data['upcoming_shows'] = []
 
     past_shows = Show.query.filter(Show.artist_id == artist_id)\
-        .filter(Show.start_time < datetime.now()).order_by(desc(Show.start_time)).all()
+        .filter(Show.start_time < datetime.now()).order_by(Show.start_time).all()
 
     data['past_shows_count'] = len(past_shows)
     for row in past_shows:
